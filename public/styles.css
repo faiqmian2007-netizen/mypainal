@@ -1,0 +1,392 @@
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #1a1a1a;
+    color: #ffffff;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.owner-info {
+    display: flex;
+    flex-direction: column;
+    text-align: right;
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+
+.tabs {
+    display: flex;
+    background: #2d2d2d;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 15px 20px;
+    background: transparent;
+    border: none;
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+    background: #404040;
+}
+
+.tab-btn.active {
+    background: #667eea;
+    color: white;
+}
+
+.tab-content {
+    background: #2d2d2d;
+    border-radius: 10px;
+    padding: 20px;
+}
+
+.control-panel {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    align-items: center;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.start-btn {
+    background: #28a745;
+}
+
+.start-btn:hover {
+    background: #218838;
+}
+
+.restart-btn {
+    background: #ffc107;
+    color: #000;
+}
+
+.restart-btn:hover {
+    background: #e0a800;
+}
+
+.stop-btn {
+    background: #dc3545;
+}
+
+.stop-btn:hover {
+    background: #c82333;
+}
+
+.btn {
+    background: #6c757d;
+}
+
+.btn:hover {
+    background: #5a6268;
+}
+
+.status {
+    padding: 8px 15px;
+    border-radius: 20px;
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+}
+
+.status.running {
+    background: #28a745;
+    color: white;
+}
+
+.status.stopped {
+    background: #dc3545;
+    color: white;
+}
+
+.console-container {
+    background: #1a1a1a;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.console-header {
+    padding: 10px 15px;
+    background: #404040;
+    border-radius: 5px 5px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logs {
+    height: 300px;
+    overflow-y: auto;
+    padding: 15px;
+    background: #000000;
+    color: #00ff00;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    border-radius: 0 0 5px 5px;
+}
+
+.command-input-container {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.command-input-container input {
+    flex: 1;
+    padding: 10px;
+    background: #404040;
+    border: 1px solid #555;
+    border-radius: 5px;
+    color: white;
+    font-size: 0.9rem;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    background: #404040;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.stat-card h3 {
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+    color: #cccccc;
+}
+
+.stat-card span {
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: #667eea;
+}
+
+.address-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+}
+
+.copy-btn {
+    padding: 5px 10px;
+    background: #667eea;
+    border: none;
+    border-radius: 3px;
+    color: white;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.file-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.file-list {
+    background: #1a1a1a;
+    border-radius: 5px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.file-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 15px;
+    padding: 12px 15px;
+    border-bottom: 1px solid #404040;
+    align-items: center;
+}
+
+.file-item:hover {
+    background: #2d2d2d;
+}
+
+.file-name {
+    font-weight: 500;
+}
+
+.file-name.directory {
+    color: #667eea;
+}
+
+.file-name.file {
+    color: #ffffff;
+}
+
+.file-size {
+    color: #cccccc;
+    font-size: 0.9rem;
+}
+
+.file-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.file-actions button {
+    padding: 5px 10px;
+    background: #667eea;
+    border: none;
+    border-radius: 3px;
+    color: white;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.setup-container {
+    max-width: 500px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.form-group input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    background: #404040;
+    border: 1px solid #555;
+    border-radius: 5px;
+    color: white;
+    font-size: 0.9rem;
+}
+
+.form-group input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: #2d2d2d;
+    padding: 20px;
+    border-radius: 10px;
+    max-width: 800px;
+    width: 90%;
+    max-height: 80%;
+    overflow-y: auto;
+}
+
+.modal-content h3 {
+    margin-bottom: 15px;
+}
+
+.modal-content textarea {
+    width: 100%;
+    background: #1a1a1a;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 10px;
+    font-family: 'Courier New', monospace;
+    margin-bottom: 15px;
+}
+
+.modal-content div {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.clear-btn {
+    background: #dc3545;
+}
+
+.clear-btn:hover {
+    background: #c82333;
+}
+
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    header {
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
+    }
+    
+    .control-panel {
+        flex-wrap: wrap;
+    }
+    
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .file-controls {
+        flex-direction: column;
+    }
+}
