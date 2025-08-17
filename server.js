@@ -1,382 +1,476 @@
 const express = require('express');
-const app = express();
-const http = require('http').createServer(app);
-const io = require('socket.io')(http);
-const bodyParser = require('body-parser');
+const http = require('http');
+const socketIo = require('socket.io');
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs-extra');
 const { spawn, exec } = require('child_process');
 const archiver = require('archiver');
 const unzipper = require('unzipper');
-const os = require('os');
+const cors = require('cors');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
 
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
-app.use(express.static('public'));
-app.use('/client.js', express.static('./client.js'));
-
-let botProcess = null;
-let botStatus = 'stopped';
-let botLogs = [];
-let startupConfig = {
-  mainFile: 'index.js',
-  autoInstall: true
-};
-
-// Enhanced start with auto dependency installation
-app.post('/start', (req, res) => {
-  if (botStatus === 'running') return res.sendStatus(400);
-
-  const startBot = () => {
-    botProcess = spawn('node', [startupConfig.mainFile]);
-    botStatus = 'running';
-
-    botProcess.stdout.on('data', (data) => {
-      const log = data.toString();
-      botLogs.push(log);
-      io.emit('log', log);
-    });
-
-    botProcess.stderr.on('data', (data) => {
-      const log = data.toString();
-      botLogs.push(log);
-      io.emit('log', log);
-    });
-
-    botProcess.on('close', () => {
-      botStatus = 'stopped';
-      io.emit('status', 'stopped');
-    });
-
-    io.emit('status', 'running');
-    res.sendStatus(200);
-  };
-
-  if (startupConfig.autoInstall && fs.existsSync('package.json')) {
-    const log = 'Installing dependencies...\n';
-    botLogs.push(log);
-    io.emit('log', log);
-
-    const installProcess = spawn('npm', ['install']);
-
-    installProcess.stdout.on('data', (data) => {
-      const log = data.toString();
-      botLogs.push(log);
-      io.emit('log', log);
-    });
-
-    installProcess.on('close', (code) => {
-      if (code === 0) {
-        const log = 'Dependencies installed successfully!\n';
-        botLogs.push(log);
-        io.emit('log', log);
-        startBot();
-      } else {
-        const log = 'Failed to install dependencies!\n';
-        botLogs.push(log);
-        io.emit('log', log);
-        res.sendStatus(500);
-      }
-    });
-  } else {
-    startBot();
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
   }
 });
 
-// Stop bot
-app.post('/stop', (req, res) => {
-  if (botStatus === 'stopped') return res.sendStatus(400);
-  botProcess.kill();
-  botStatus = 'stopped';
-  io.emit('status', 'stopped');
-  res.sendStatus(200);
+// Middleware
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.use(cors());
+app.use(compression());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.static('public'));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// File upload configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/';
+    fs.ensureDirSync(uploadDir);
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
 });
 
-// Restart bot
-app.post('/restart', (req, res) => {
-  if (botProcess) botProcess.kill();
-
-  setTimeout(() => {
-    botProcess = spawn('node', [startupConfig.mainFile]);
-    botStatus = 'running';
-
-    botProcess.stdout.on('data', (data) => {
-      const log = data.toString();
-      botLogs.push(log);
-      io.emit('log', log);
-    });
-
-    botProcess.stderr.on('data', (data) => {
-      const log = data.toString();
-      botLogs.push(log);
-      io.emit('log', log);
-    });
-
-    botProcess.on('close', () => {
-      botStatus = 'stopped';
-      io.emit('status', 'stopped');
-    });
-
-    io.emit('status', 'running');
-    res.sendStatus(200);
-  }, 1000);
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
 });
 
-// Command execution
-app.post('/execute', (req, res) => {
-  const { command } = req.body;
+// Global variables
+let runningProcesses = new Map();
+let consoleLogs = [];
+let systemInfo = {};
 
-  const log = `$ ${command}\n`;
-  botLogs.push(log);
-  io.emit('log', log);
+// Get system information
+async function updateSystemInfo() {
+  try {
+    const { stdout: nodeVersion } = await exec('node --version');
+    const { stdout: npmVersion } = await exec('npm --version');
+    const { stdout: platform } = await exec('uname -a');
+    
+    systemInfo = {
+      nodeVersion: nodeVersion.trim(),
+      npmVersion: npmVersion.trim(),
+      platform: platform.trim(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      cwd: process.cwd()
+    };
+  } catch (error) {
+    console.error('Error getting system info:', error);
+  }
+}
 
-  exec(command, { cwd: __dirname }, (error, stdout, stderr) => {
-    if (stdout) {
-      botLogs.push(stdout);
-      io.emit('log', stdout);
-    }
-    if (stderr) {
-      botLogs.push(stderr);
-      io.emit('log', stderr);
-    }
-    if (error) {
-      const errorLog = `Error: ${error.message}\n`;
-      botLogs.push(errorLog);
-      io.emit('log', errorLog);
-    }
-  });
+// Update system info every 30 seconds
+setInterval(updateSystemInfo, 30000);
+updateSystemInfo();
 
+// Routes
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Get system information
+app.get('/api/system', (req, res) => {
+  res.json(systemInfo);
+});
+
+// Get console logs
+app.get('/api/logs', (req, res) => {
+  res.json(consoleLogs.slice(-1000)); // Last 1000 logs
+});
+
+// Clear console logs
+app.post('/api/logs/clear', (req, res) => {
+  consoleLogs = [];
   res.json({ success: true });
 });
 
-// Clear logs
-app.post('/clear-logs', (req, res) => {
-  botLogs = [];
-  res.sendStatus(200);
-});
-
-// Enhanced file list with more details
-app.get('/files', (req, res) => {
-  const dir = req.query.dir || __dirname;
-  fs.readdir(dir, { withFileTypes: true }, (err, files) => {
-    if (err) return res.status(500).send('Error reading directory');
-
-    // Filter out panel-related files
-    const panelFiles = [
-      'server.js', 'client.js', 'public', 'uploads', 
-      '.replit', 'package.json', 'package-lock.json',
-      '.gitignore', 'attached_assets', 'bot.js', 'replit.nix',
-      '.git', '.cache', '.config', '.local', '.upm',
-      'node_modules'
-    ];
-
-    const fileList = files
-      .filter(file => !panelFiles.includes(file.name))
-      .map(file => {
-        const filePath = path.join(dir, file.name);
-        let stats = null;
-        try {
-          stats = fs.statSync(filePath);
-        } catch (e) {}
-
-        return {
-          name: file.name,
-          isDir: file.isDirectory(),
-          path: filePath,
-          size: stats ? stats.size : 0,
-          modified: stats ? stats.mtime : new Date()
-        };
-      });
-
-    res.json(fileList);
-  });
-});
-
-// Enhanced upload with multiple files
-app.post('/upload', upload.array('files'), (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).send('No files uploaded');
+// Get file list
+app.get('/api/files', (req, res) => {
+  const dir = req.query.dir || '.';
+  const fullPath = path.resolve(dir);
+  
+  if (!fullPath.startsWith(process.cwd())) {
+    return res.status(403).json({ error: 'Access denied' });
   }
-
-  let completed = 0;
-  const total = req.files.length;
-  let hasPackageJson = false;
-
-  req.files.forEach(file => {
-    const newPath = path.join(__dirname, file.originalname);
-    if (file.originalname === 'package.json') {
-      hasPackageJson = true;
-    }
-    
-    fs.rename(file.path, newPath, (err) => {
-      if (err) {
-        console.error('Error uploading file:', err);
-      }
-      completed++;
-      if (completed === total) {
-        // Check if package.json exists and node_modules doesn't
-        if (hasPackageJson && !fs.existsSync(path.join(__dirname, 'node_modules'))) {
-          const log = 'Auto-installing project dependencies...\n';
-          botLogs.push(log);
-          io.emit('log', log);
-
-          const installProcess = spawn('npm', ['install']);
-
-          installProcess.stdout.on('data', (data) => {
-            const log = data.toString();
-            botLogs.push(log);
-            io.emit('log', log);
-          });
-
-          installProcess.stderr.on('data', (data) => {
-            const log = data.toString();
-            botLogs.push(log);
-            io.emit('log', log);
-          });
-
-          installProcess.on('close', (code) => {
-            if (code === 0) {
-              const log = 'Project dependencies installed successfully!\n';
-              botLogs.push(log);
-              io.emit('log', log);
-            } else {
-              const log = 'Failed to install project dependencies!\n';
-              botLogs.push(log);
-              io.emit('log', log);
-            }
-          });
-        }
-        res.sendStatus(200);
-      }
+  
+  try {
+    const items = fs.readdirSync(fullPath);
+    const files = items.map(item => {
+      const itemPath = path.join(fullPath, item);
+      const stats = fs.statSync(itemPath);
+      return {
+        name: item,
+        path: path.relative(process.cwd(), itemPath),
+        isDirectory: stats.isDirectory(),
+        size: stats.size,
+        modified: stats.mtime,
+        permissions: stats.mode.toString(8)
+      };
     });
-  });
+    
+    res.json({
+      currentDir: dir,
+      parentDir: path.dirname(dir),
+      files: files.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1;
+        if (!a.isDirectory && b.isDirectory) return 1;
+        return a.name.localeCompare(b.name);
+      })
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Create directory
-app.post('/create-directory', (req, res) => {
-  const { name } = req.body;
-  const dirPath = path.join(__dirname, name);
+app.post('/api/files/mkdir', (req, res) => {
+  const { name, parentDir = '.' } = req.body;
+  const fullPath = path.resolve(parentDir, name);
+  
+  if (!fullPath.startsWith(process.cwd())) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  
+  try {
+    fs.ensureDirSync(fullPath);
+    res.json({ success: true, path: fullPath });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-  fs.mkdir(dirPath, { recursive: true }, (err) => {
-    if (err) return res.status(500).send('Error creating directory');
-    res.sendStatus(200);
+// Delete file/directory
+app.delete('/api/files', (req, res) => {
+  const { path: filePath } = req.query;
+  const fullPath = path.resolve(filePath);
+  
+  if (!fullPath.startsWith(process.cwd())) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  
+  try {
+    fs.removeSync(fullPath);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload file
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  
+  const { destination, filename } = req.file;
+  const finalPath = path.join(destination, filename);
+  
+  res.json({
+    success: true,
+    file: {
+      name: filename,
+      path: finalPath,
+      size: req.file.size
+    }
   });
 });
 
-// Create new file
-app.post('/create-file', (req, res) => {
-  const { name, content } = req.body;
-  const filePath = path.join(__dirname, name);
-
-  fs.writeFile(filePath, content || '', (err) => {
-    if (err) return res.status(500).send('Error creating file');
-    res.sendStatus(200);
-  });
+// Upload and extract ZIP
+app.post('/api/upload-zip', upload.single('zip'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No ZIP file uploaded' });
+  }
+  
+  try {
+    const extractDir = path.join('projects', Date.now().toString());
+    await fs.ensureDir(extractDir);
+    
+    const zipPath = req.file.path;
+    const extractStream = fs.createReadStream(zipPath).pipe(unzipper.Parse());
+    
+    extractStream.on('entry', (entry) => {
+      const fileName = entry.path;
+      const type = entry.type;
+      const size = entry.vars.uncompressedSize;
+      
+      if (type === 'Directory') {
+        fs.ensureDirSync(path.join(extractDir, fileName));
+      } else {
+        const writeStream = fs.createWriteStream(path.join(extractDir, fileName));
+        entry.pipe(writeStream);
+      }
+    });
+    
+    extractStream.on('close', () => {
+      fs.unlinkSync(zipPath); // Remove uploaded ZIP
+      res.json({
+        success: true,
+        extractDir: extractDir,
+        message: 'ZIP extracted successfully'
+      });
+    });
+    
+    extractStream.on('error', (error) => {
+      throw error;
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Get file content for editing
-app.get('/file-content', (req, res) => {
-  const filePath = req.query.path;
-
-  fs.readFile(filePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).send('Error reading file');
-    res.send(data);
-  });
-});
-
-// Save file content
-app.post('/save-file', (req, res) => {
-  const { path: filePath, content } = req.body;
-
-  fs.writeFile(filePath, content, (err) => {
-    if (err) return res.status(500).send('Error saving file');
-    res.sendStatus(200);
-  });
-});
-
-// Enhanced delete
-app.post('/delete', (req, res) => {
-  const { file } = req.body;
-
-  fs.stat(file, (err, stats) => {
-    if (err) return res.status(500).send('File not found');
-
-    if (stats.isDirectory()) {
-      fs.rmdir(file, { recursive: true }, (err) => {
-        if (err) return res.status(500).send('Error deleting directory');
-        res.sendStatus(200);
+// Run Node.js project
+app.post('/api/run', async (req, res) => {
+  const { projectPath, mainFile = 'index.js' } = req.body;
+  const fullPath = path.resolve(projectPath);
+  
+  if (!fullPath.startsWith(process.cwd())) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  
+  try {
+    // Check if package.json exists and install dependencies
+    const packageJsonPath = path.join(fullPath, 'package.json');
+    if (await fs.pathExists(packageJsonPath)) {
+      const log = `Installing dependencies for ${projectPath}...\n`;
+      consoleLogs.push(log);
+      io.emit('console-log', log);
+      
+      const installProcess = spawn('npm', ['install'], { 
+        cwd: fullPath,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      installProcess.stdout.on('data', (data) => {
+        const log = data.toString();
+        consoleLogs.push(log);
+        io.emit('console-log', log);
+      });
+      
+      installProcess.stderr.on('data', (data) => {
+        const log = data.toString();
+        consoleLogs.push(log);
+        io.emit('console-log', log);
+      });
+      
+      installProcess.on('close', (code) => {
+        if (code === 0) {
+          const log = `Dependencies installed successfully!\n`;
+          consoleLogs.push(log);
+          io.emit('console-log', log);
+          startProject(fullPath, mainFile);
+        } else {
+          const log = `Failed to install dependencies (exit code: ${code})\n`;
+          consoleLogs.push(log);
+          io.emit('console-log', log);
+          res.status(500).json({ error: 'Failed to install dependencies' });
+        }
       });
     } else {
-      fs.unlink(file, (err) => {
-        if (err) return res.status(500).send('Error deleting file');
-        res.sendStatus(200);
-      });
+      startProject(fullPath, mainFile);
     }
-  });
+    
+    res.json({ success: true, message: 'Starting project...' });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Unzip functionality
-app.post('/unzip', (req, res) => {
-  const { file } = req.body;
-  const extractPath = path.dirname(file);
+function startProject(projectPath, mainFile) {
+  const mainFilePath = path.join(projectPath, mainFile);
+  
+  if (!fs.existsSync(mainFilePath)) {
+    const log = `Main file ${mainFile} not found in ${projectPath}\n`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+    return;
+  }
+  
+  const processId = Date.now().toString();
+  const log = `Starting project: ${mainFile} in ${projectPath}\n`;
+  consoleLogs.push(log);
+  io.emit('console-log', log);
+  
+  const childProcess = spawn('node', [mainFile], {
+    cwd: projectPath,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  
+  runningProcesses.set(processId, {
+    process: childProcess,
+    projectPath: projectPath,
+    mainFile: mainFile,
+    startTime: new Date()
+  });
+  
+  childProcess.stdout.on('data', (data) => {
+    const log = `[${processId}] ${data.toString()}`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+  });
+  
+  childProcess.stderr.on('data', (data) => {
+    const log = `[${processId}] ERROR: ${data.toString()}`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+  });
+  
+  childProcess.on('close', (code) => {
+    const log = `[${processId}] Process exited with code ${code}\n`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+    runningProcesses.delete(processId);
+  });
+  
+  io.emit('process-started', { processId, projectPath, mainFile });
+}
 
-  fs.createReadStream(file)
-    .pipe(unzipper.Extract({ path: extractPath }))
-    .on('close', () => {
-      res.sendStatus(200);
-    })
-    .on('error', (err) => {
-      res.status(500).send('Error extracting file');
+// Stop process
+app.post('/api/stop/:processId', (req, res) => {
+  const { processId } = req.params;
+  const processInfo = runningProcesses.get(processId);
+  
+  if (!processInfo) {
+    return res.status(404).json({ error: 'Process not found' });
+  }
+  
+  try {
+    processInfo.process.kill();
+    runningProcesses.delete(processId);
+    
+    const log = `Process ${processId} stopped\n`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+    
+    res.json({ success: true, message: 'Process stopped' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get running processes
+app.get('/api/processes', (req, res) => {
+  const processes = Array.from(runningProcesses.entries()).map(([id, info]) => ({
+    id,
+    projectPath: info.projectPath,
+    mainFile: info.mainFile,
+    startTime: info.startTime,
+    uptime: Date.now() - info.startTime.getTime()
+  }));
+  
+  res.json(processes);
+});
+
+// Execute command
+app.post('/api/execute', (req, res) => {
+  const { command, cwd = '.' } = req.body;
+  const fullPath = path.resolve(cwd);
+  
+  if (!fullPath.startsWith(process.cwd())) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  
+  try {
+    const log = `Executing: ${command} in ${cwd}\n`;
+    consoleLogs.push(log);
+    io.emit('console-log', log);
+    
+    const childProcess = exec(command, { cwd: fullPath });
+    
+    childProcess.stdout.on('data', (data) => {
+      const log = data.toString();
+      consoleLogs.push(log);
+      io.emit('console-log', log);
     });
+    
+    childProcess.stderr.on('data', (data) => {
+      const log = data.toString();
+      consoleLogs.push(log);
+      io.emit('console-log', log);
+    });
+    
+    childProcess.on('close', (code) => {
+      const log = `Command completed with exit code: ${code}\n`;
+      consoleLogs.push(log);
+      io.emit('console-log', log);
+    });
+    
+    res.json({ success: true, message: 'Command executed' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Download selected files as ZIP
-app.post('/download-zip', (req, res) => {
-  const { files } = req.body;
-
-  res.attachment('selected-files.zip');
-
-  const archive = archiver('zip');
-  archive.pipe(res);
-
-  files.forEach(file => {
-    const stats = fs.statSync(file);
-    if (stats.isFile()) {
-      archive.file(file, { name: path.basename(file) });
-    } else if (stats.isDirectory()) {
-      archive.directory(file, path.basename(file));
-    }
-  });
-
-  archive.finalize();
-});
-
-// Startup configuration
-app.post('/startup-config', (req, res) => {
-  startupConfig = req.body;
-  res.sendStatus(200);
-});
-
-// System stats
-app.get('/system-stats', (req, res) => {
-  const stats = {
-    cpu: Math.round(Math.random() * 100), // Simulated CPU usage
-    memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-    disk: Math.round(Math.random() * 10),
-    networkIn: Math.round(Math.random() * 100),
-    networkOut: Math.round(Math.random() * 50)
-  };
-  res.json(stats);
-});
-
+// Socket.IO connection handling
 io.on('connection', (socket) => {
-  socket.emit('status', botStatus);
-  socket.emit('logs', botLogs.join(''));
+  console.log('Client connected:', socket.id);
+  
+  // Send initial data
+  socket.emit('system-info', systemInfo);
+  socket.emit('console-logs', consoleLogs.slice(-100));
+  socket.emit('running-processes', Array.from(runningProcesses.keys()));
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
 });
 
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Error:', error);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// Start server
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, '0.0.0.0', () => {
-  console.log(`Professional Bot Panel running on http://0.0.0.0:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Node.js Deployment Panel running on port ${PORT}`);
+  console.log(`📱 Access the panel at: http://localhost:${PORT}`);
+  console.log(`🌐 Mobile and PC friendly interface`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
